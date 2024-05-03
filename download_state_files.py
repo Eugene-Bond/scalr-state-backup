@@ -6,64 +6,63 @@ import requests
 import json
 import sys
 
-parser = argparse.ArgumentParser(description='Download state files from Scalr')
-parser.add_argument('--output-dir', '-o', type=str, help='Output directory')
-parser.add_argument('--host', '-d', type=str, help='Scalr host')
-parser.add_argument('--token', '-t', type=str, help='Scalr API token')
-args = parser.parse_args()
+def parse_args():
+    parser = argparse.ArgumentParser(description='Download state files from Scalr')
+    parser.add_argument('--output-dir', '-o', required=True, type=str, help='Output directory')
+    parser.add_argument('--host', '-d', type=str, default=os.getenv('SCALR_HOST'), help='Scalr host')
+    parser.add_argument('--token', '-t', type=str, default=os.getenv('SCALR_TOKEN'), help='Scalr API token')
+    return parser.parse_args()
 
-output_dir = args.output_dir
-host = args.host or os.environ.get('SCALR_HOST')
-token = args.token or os.environ.get('SCALR_TOKEN')
+def setup_headers(token):
+    return {
+        "accept": "application/vnd.api+json",
+        "Prefer": "profile=preview",
+        "authorization": "Bearer " + token
+    }
 
-if not all([output_dir, host, token]):
-    parser.print_help()
-    sys.exit(1)
-
-headers = {
-    "accept": "application/vnd.api+json",
-    "Prefer": "profile=preview",
-    "authorization": "Bearer " + token
-}
-
-page = 1
-
-while True:
-
-    url = "https://" + host + "/api/iacp/v3/workspaces?page[number]=" + str(page)
-
-    response = requests.get(url, headers=headers)
-
+def get_workspace_data(session, host, headers, page):
+    url = f"https://{host}/api/iacp/v3/workspaces?page[number]={page}"
+    response = session.get(url, headers=headers)
     if response.status_code != 200:
-        print("Request failed. Wrong token?")
-        sys.exit(1)
+        raise ValueError("Request failed. Wrong token?")
+    return json.loads(response.text)
 
-    data = json.loads(response.text)
-
-    total_pages = data['meta']['pagination']['total-pages']
-
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    for item in data['data']:
-
-        url = "https://" + host + "/api/iacp/v3/workspaces/" + item['id'] + "/current-state-version"
-
-        response = requests.get(url, headers=headers)
-        data = json.loads(response.text)
+def download_state_files(session, host, headers, output_dir, workspace_data):
+    for item in workspace_data['data']:
+        state_url = f"https://{host}/api/iacp/v3/workspaces/{item['id']}/current-state-version"
+        response = session.get(state_url, headers=headers)
+        state_data = json.loads(response.text)
 
         try:
-            download_link = data['data']['links']['download']
+            download_link = state_data['data']['links']['download']
         except KeyError:
             continue
 
-        print("Downloading state file for " + item['id'] + " to " + output_dir)
+        print(f"Downloading state file for {item['id']} to {output_dir}")
+        file_response = session.get(download_link)
+        file_path = os.path.join(output_dir, f"{item['id']}.json")
+        with open(file_path, "wb") as f:
+            f.write(file_response.content)
 
-        response = requests.get(download_link)
-        with open(output_dir + "/" + item['id'] + ".json", "wb") as f:
-            f.write(response.content)
+def main():
+    args = parse_args()
+    headers = setup_headers(args.token)
 
-    if page == total_pages:
-        sys.exit(0)
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
 
-    page += 1
+    with requests.Session() as session:
+        page = 1
+        while True:
+            workspace_data = get_workspace_data(session, args.host, headers, page)
+            download_state_files(session, args.host, headers, args.output_dir, workspace_data)
+
+            pagination = workspace_data.get('meta', {}).get('pagination', {})
+            total_pages = pagination.get('total-pages', 1)  # Assume there is at least one page if missing
+
+            if page == total_pages:
+                break
+            page += 1
+
+if __name__ == '__main__':
+    main()
