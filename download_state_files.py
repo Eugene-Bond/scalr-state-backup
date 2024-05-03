@@ -33,16 +33,19 @@ def download_state_files(session, host, headers, output_dir, workspace_data):
         response = session.get(state_url, headers=headers)
         state_data = json.loads(response.text)
 
+        download_link = None  # Reset download_link for each item
         try:
             download_link = state_data['data']['links']['download']
         except KeyError:
+            print(f"Download link not found for {item['id']}. Skipping.")
             continue
 
-        print(f"Downloading state file for {item['id']} to {output_dir}")
-        file_response = session.get(download_link)
-        file_path = os.path.join(output_dir, f"{item['id']}.json")
-        with open(file_path, "wb") as f:
-            f.write(file_response.content)
+        if download_link:
+            print(f"Downloading state file for {item['id']} to {output_dir}")
+            file_response = session.get(download_link)
+            file_path = os.path.join(output_dir, f"{item['id']}.json")
+            with open(file_path, "wb") as f:
+                f.write(file_response.content)
 
 def main():
     args = parse_args()
